@@ -92,3 +92,13 @@ class Database:
         )
 
         self._connection.commit()
+
+    # def find(self, question, amount):
+    #     """Return amount of questions similar to the your question."""
+
+    #     self._cursor.execute(
+    #         """
+    #             SELECT faq_id, question
+    #                 UTL_MATCH.JARO_WIN
+    #         """
+    #     )
