@@ -20,6 +20,10 @@ class Add(StatesGroup):
     question = State()
     answer = State()
 
+class Cancel(StatesGroup):
+    chat_id = State()
+    message_id = State()
+
 async def check_text(message: Message):
     text = (message.text or '').strip()
         
@@ -28,6 +32,33 @@ async def check_text(message: Message):
         return None
 
     return text
+
+async def propose(message: Message, state: FSMContext):
+        # Buttons
+        markup = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text='Add a question', callback_data='add')],
+            [types.InlineKeyboardButton(text='Remove a question', callback_data='remove')],
+            [types.InlineKeyboardButton(text='Answer to the client', callback_data='answer')]
+        ])
+
+        await message.answer(
+            'What would you like to do?',
+            reply_markup=markup
+        )
+
+async def delete_buttons(bot: Bot, chat_id: int, message_id: int):
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=chat_id, 
+            message_id=message_id, 
+            reply_markup=None
+        )
+    except Exception as e:
+        print('Problem when deleting buttons')
+
+CANCEL_MARKUP = types.InlineKeyboardMarkup(inline_keyboard=[
+    [types.InlineKeyboardButton(text='Cancel', callback_data='cancel')]
+])
 
 db = Database(
     os.getenv('USER'),
@@ -53,20 +84,8 @@ async def support():
             await message.answer('The password is wrong. Try again.')
             return
         
-        # Buttons
-        markup = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text='Add a question', callback_data='add')],
-            [types.InlineKeyboardButton(text='Remove a question', callback_data='remove')],
-            [types.InlineKeyboardButton(text='Answer to the client', callback_data='answer')]
-        ])
-
-        await message.answer(
-            f'Hello, {message.from_user.first_name}. '
-            'Would you like to do?',
-            reply_markup=markup
-        )
-
-        await state.clear()
+        await message.answer(f'Hello, {message.from_user.first_name}.')
+        await propose(message, state)
         
     # Add command processing
     @dp.message(Command('add'))
@@ -78,36 +97,49 @@ async def support():
     @dp.callback_query(F.data == 'add')
     async def add_first_step(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
-        await callback.message.answer('Enter the question.')
+        ans = await callback.message.answer(
+            'Enter the question.',
+            reply_markup=CANCEL_MARKUP
+        )
+        await state.update_data(message_id=ans.message_id)
         await state.set_state(Add.question)
 
     @dp.message(Add.question)
-    async def add_question(message: Message, state: FSMContext):
+    async def add_question(message: Message, state: FSMContext  ):
+        data = await state.get_data()
+        old_message = data['message_id']
+        if old_message:
+            await delete_buttons(message.bot, message.chat.id, old_message)
         text = await check_text(message)
 
         if text is None:
             return
         if len(text) > 150:
             await message.answer(
-            'The size of this question is more than 150 symbols. '
-            'Write it shorter.'
+                'The size of this question is more than 150 symbols. '
+                'Write it shorter.',
+                reply_markup=CANCEL_MARKUP
             )
             return
         
         await state.update_data(question=text)
-        await message.answer("Good. Now enter the answer.")
+        await message.answer(
+            "Good. Now enter the answer.",
+            reply_markup=CANCEL_MARKUP
+        )
         await state.set_state(Add.answer)
 
     @dp.message(Add.answer)
     async def add_answer(message: Message, state: FSMContext):
+
         text = await check_text(message)
 
         if text is None:
             return
         if len(text) > 500:
             await message.answer(
-            'The size of this answer is more than 500 symbols. '
-            'Write it shorter.'
+                'The size of this answer is more than 500 symbols. '
+                'Write it shorter.'
             )
             return
         
@@ -127,8 +159,8 @@ async def support():
             await state.clear()
 
     @dp.message()
-    async def message(message: Message):
-        await message.answer('Please, send a command.')
+    async def other_messages(message: Message, state: FSMContext):
+        await propose(message, state)
 
     await dp.start_polling(bot)
 
