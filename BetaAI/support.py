@@ -56,6 +56,14 @@ async def delete_buttons(bot: Bot, chat_id: int, message_id: int):
     except Exception as e:
         print('Problem when deleting buttons')
 
+async def load_data(message: Message, state: FSMContext):
+    data = await state.get_data()
+    old_message = data['message_id']
+    if old_message:
+        await delete_buttons(message.bot, message.chat.id, old_message)
+
+    return await check_text(message)
+
 CANCEL_MARKUP = types.InlineKeyboardMarkup(inline_keyboard=[
     [types.InlineKeyboardButton(text='Cancel', callback_data='cancel')]
 ])
@@ -65,6 +73,8 @@ db = Database(
     os.getenv('DB_PASSWORD'),
     os.getenv('DSN')
 )
+
+
 
 # General function for support bot
 async def support():
@@ -90,7 +100,11 @@ async def support():
     # Add command processing
     @dp.message(Command('add'))
     async def add_command(message: Message, state: FSMContext):
-        await message.answer('Enter the question.')
+        ans = await message.answer(
+            'Enter the question.',
+            reply_markup=CANCEL_MARKUP
+        )
+        await state.update_data(message_id=ans.message_id)
         await state.set_state(Add.question)
 
     # Add button processing
@@ -106,41 +120,41 @@ async def support():
 
     @dp.message(Add.question)
     async def add_question(message: Message, state: FSMContext  ):
-        data = await state.get_data()
-        old_message = data['message_id']
-        if old_message:
-            await delete_buttons(message.bot, message.chat.id, old_message)
-        text = await check_text(message)
+        text = await load_data(message, state)
 
         if text is None:
             return
         if len(text) > 150:
-            await message.answer(
+            ans = await message.answer(
                 'The size of this question is more than 150 symbols. '
                 'Write it shorter.',
                 reply_markup=CANCEL_MARKUP
             )
+            await state.update_data(message_id=ans.message_id)
             return
         
         await state.update_data(question=text)
-        await message.answer(
+        ans = await message.answer(
             "Good. Now enter the answer.",
             reply_markup=CANCEL_MARKUP
         )
+        await state.update_data(message_id=ans.message_id)
         await state.set_state(Add.answer)
 
     @dp.message(Add.answer)
     async def add_answer(message: Message, state: FSMContext):
 
-        text = await check_text(message)
+        text = await load_data(message, state)
 
         if text is None:
             return
         if len(text) > 500:
-            await message.answer(
+            ans = await message.answer(
                 'The size of this answer is more than 500 symbols. '
-                'Write it shorter.'
+                'Write it shorter.',
+                reply_markup=CANCEL_MARKUP
             )
+            await state.update_data(message_id=ans.message_id)
             return
         
         try:
@@ -157,6 +171,15 @@ async def support():
             await message.answer('The question was added.')
         finally:
             await state.clear()
+
+    # Cancel button procesing
+    @dp.callback_query(F.data == 'cancel')
+    async def cancel(callback: CallbackQuery, state: FSMContext):
+        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer('You canceled the action.')
+        await state.clear()
+
 
     @dp.message()
     async def other_messages(message: Message, state: FSMContext):
