@@ -3,6 +3,7 @@
 from database import Database
 import os
 import dotenv
+from openai import OpenAI
 import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -19,6 +20,9 @@ class Check(StatesGroup):
 class Add(StatesGroup):
     question = State()
     answer = State()
+
+class Remove(StatesGroup):
+    delete = State()
 
 class Cancel(StatesGroup):
     chat_id = State()
@@ -73,6 +77,8 @@ db = Database(
     os.getenv('DB_PASSWORD'),
     os.getenv('DSN')
 )
+
+client = OpenAI(api_key=os.getenv('OPENAI_API'))
 
 
 
@@ -159,10 +165,15 @@ async def support():
         
         try:
             data = await state.get_data()
+            resp = client.embeddings.create(
+                input=data['question'],
+                model='text-embedding-3-large'
+            )
+            embedding = resp.data[0].embedding  
             db.add_question(
                 data['question'],
                 text,
-                [1, 3, 5]
+                embedding
             )
         except Exception as e:
             await message.answer('Sorry, something went wrong. :(')
@@ -179,6 +190,35 @@ async def support():
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer('You canceled the action.')
         await state.clear()
+
+    @dp.callback_query(F.data == 'remove')
+    async def remove(callback: CallbackQuery, state: FSMContext):
+        await callback.answer()
+        ans = await callback.message.answer(
+            'Enter the id of the question to delete it from the database. '
+            'Also you can enter the part of the question to get its id.',
+            reply_markup=CANCEL_MARKUP
+        )
+        await state.update_data(message_id=ans.message_id)
+        await state.set_state(Remove.delete)
+
+    @dp.message(Remove.delete)
+    async def remove_question(message: Message, state: FSMContext):
+        text = await load_data(message, state)
+
+        if not text:
+            ans = await message.answer('Send the text.', reply_markup=CANCEL_MARKUP)
+            await state.update_data(message_id=ans.message_id)
+        else:
+            try:
+                num = int(text)
+                db.delete_question(num)
+                await message.answer('If this question was existed, it was deleted.')
+            except ValueError:
+                await message.answer(f'This is your text: {text}')
+            finally:
+                await state.clear()
+
 
 
     @dp.message()
