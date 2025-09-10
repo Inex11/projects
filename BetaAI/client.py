@@ -1,3 +1,4 @@
+from collections import defaultdict, deque
 import random
 import os
 import asyncio
@@ -8,8 +9,16 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 import openai
+import json
 
 dotenv.load_dotenv()
+
+try:
+    with open('prompt.txt', 'r') as f:
+        PROMPT = f.read()
+except FileNotFoundError:
+    print('The prompt.txt file was not found.')
+    raise SystemExit(1)
 
 async def client():
     bot = Bot(os.getenv('CLIENT_API'))
@@ -17,13 +26,7 @@ async def client():
 
     openai.api_key = os.getenv('OPENAI_API')
 
-    try:
-        f = open('prompt.txt', 'r')
-    except FileNotFoundError:
-        print('The prompt.txt file was not found.')
-        return
-
-    chats = [{'role': 'system', 'content': f.read()}]
+    chats = defaultdict(lambda: deque(maxlen=10))
 
     @dp.message(Command('start'))
     async def start(message: Message, state: FSMContext):
@@ -40,17 +43,24 @@ async def client():
     @dp.message(F.text)
     async def chat(message: Message):
         try:
-            chats.append({'role': 'user', 'content': message.text})
+            uid = message.from_user.id
+            chats[uid].append({'role': 'user', 'content': message.text})
 
             response = openai.chat.completions.create(
                 model='gpt-5',
-                messages=chats,
-                max_completion_tokens=500
+                messages=[{'role': 'system', 'content': PROMPT}, *chats[uid],],
+                max_completion_tokens=500,
+                response_format={"type": "json_object"},
             )
 
             answer = response.choices[0].message.content
-            chats.append({'role': 'assistant', 'content': answer})
-            await message.answer(answer)
+            chats[uid].append({'role': 'assistant', 'content': answer})
+
+            data = json.loads(answer)
+            if data['is_question']:
+                await message.answer('We are searching your question in the database.')
+            else:
+                await message.answer(data['text'])
             
         except Exception as e:
             await message.answer('Sorry, there are some problems with OpenAI api.')
